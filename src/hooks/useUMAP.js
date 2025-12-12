@@ -21,6 +21,9 @@ export function useUMAP() {
   const umapRef = useRef(null);
   const animationRef = useRef(null);
   const dataRef = useRef(null);
+  const initializedRef = useRef(false);
+  const epochRef = useRef(0);
+  const totalEpochsRef = useRef(200);
 
   const initialize = useCallback(({
     data,
@@ -38,6 +41,11 @@ export function useUMAP() {
       setEpoch(0);
       setTotalEpochs(nEpochs);
 
+      // Update refs synchronously for immediate use
+      initializedRef.current = false;
+      epochRef.current = 0;
+      totalEpochsRef.current = nEpochs;
+
       dataRef.current = data;
 
       umapRef.current = new UMAP({
@@ -52,82 +60,83 @@ export function useUMAP() {
       const initialEmbedding = umapRef.current.getEmbedding();
       setEmbedding(initialEmbedding);
       setIsInitialized(true);
+      initializedRef.current = true;
 
       return initialEmbedding;
+    } catch (err) {
+      setError(err.message);
+      initializedRef.current = false;
+      return null;
+    }
+  }, []);
+
+  const step = useCallback(() => {
+    if (!umapRef.current || !initializedRef.current) return null;
+
+    try {
+      if (epochRef.current < totalEpochsRef.current) {
+        umapRef.current.step();
+        epochRef.current++;
+        setEpoch(epochRef.current);
+        setProgress(epochRef.current / totalEpochsRef.current);
+
+        const newEmbedding = umapRef.current.getEmbedding();
+        setEmbedding(newEmbedding);
+        return newEmbedding;
+      }
+      return umapRef.current.getEmbedding();
     } catch (err) {
       setError(err.message);
       return null;
     }
   }, []);
 
-  const step = useCallback(() => {
-    if (!umapRef.current || !isInitialized) return null;
-
-    try {
-      if (epoch < totalEpochs) {
-        umapRef.current.step();
-        const newEpoch = epoch + 1;
-        setEpoch(newEpoch);
-        setProgress(newEpoch / totalEpochs);
-
-        const newEmbedding = umapRef.current.getEmbedding();
-        setEmbedding(newEmbedding);
-        return newEmbedding;
-      }
-      return embedding;
-    } catch (err) {
-      setError(err.message);
-      return null;
-    }
-  }, [isInitialized, epoch, totalEpochs, embedding]);
-
   const runAnimated = useCallback((onStep, delay = 50) => {
-    if (!umapRef.current || !isInitialized) return;
+    if (!umapRef.current || !initializedRef.current) return;
 
     setIsRunning(true);
-    let currentEpoch = epoch;
 
     const animate = () => {
-      if (currentEpoch >= totalEpochs) {
+      if (epochRef.current >= totalEpochsRef.current) {
         setIsRunning(false);
         return;
       }
 
       umapRef.current.step();
-      currentEpoch++;
-      setEpoch(currentEpoch);
-      setProgress(currentEpoch / totalEpochs);
+      epochRef.current++;
+      setEpoch(epochRef.current);
+      setProgress(epochRef.current / totalEpochsRef.current);
 
       const newEmbedding = umapRef.current.getEmbedding();
       setEmbedding(newEmbedding);
 
-      if (onStep) onStep(newEmbedding, currentEpoch);
+      if (onStep) onStep(newEmbedding, epochRef.current);
 
       animationRef.current = setTimeout(animate, delay);
     };
 
     animate();
-  }, [isInitialized, epoch, totalEpochs]);
+  }, []);
 
   const runToCompletion = useCallback(async (onProgress) => {
-    if (!umapRef.current || !isInitialized) return null;
+    if (!umapRef.current || !initializedRef.current) return null;
 
     setIsRunning(true);
-    let currentEpoch = epoch;
+    const totalEpochs = totalEpochsRef.current;
     const reportEvery = Math.max(1, Math.floor(totalEpochs / 50));
 
     try {
-      while (currentEpoch < totalEpochs) {
+      while (epochRef.current < totalEpochs) {
         umapRef.current.step();
-        currentEpoch++;
+        epochRef.current++;
 
-        if (currentEpoch % reportEvery === 0 || currentEpoch === totalEpochs) {
-          setEpoch(currentEpoch);
-          setProgress(currentEpoch / totalEpochs);
+        if (epochRef.current % reportEvery === 0 || epochRef.current === totalEpochs) {
+          setEpoch(epochRef.current);
+          setProgress(epochRef.current / totalEpochs);
           const newEmbedding = umapRef.current.getEmbedding();
           setEmbedding(newEmbedding);
 
-          if (onProgress) onProgress(newEmbedding, currentEpoch);
+          if (onProgress) onProgress(newEmbedding, epochRef.current);
 
           // Yield to UI
           await new Promise(resolve => setTimeout(resolve, 0));
@@ -142,7 +151,7 @@ export function useUMAP() {
       setIsRunning(false);
       return null;
     }
-  }, [isInitialized, epoch, totalEpochs]);
+  }, []);
 
   const stop = useCallback(() => {
     if (animationRef.current) {
@@ -160,6 +169,8 @@ export function useUMAP() {
     setEpoch(0);
     setError(null);
     umapRef.current = null;
+    initializedRef.current = false;
+    epochRef.current = 0;
   }, [stop]);
 
   // Cleanup on unmount
